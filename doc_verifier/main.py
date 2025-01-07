@@ -90,7 +90,7 @@ async def verify(query: DocVerifierRequest):
     all_files = copy.deepcopy(query.query)
     files_dict = {}
     for file in all_files:
-        file_name = file.get("file_name", "report")
+        file_name = urlparse(file["file_path"]).path.split("/")[-1]
         if "ranking" not in file:
             file["ranking"] = 1
         files_dict[file_name] = {key: file[key] for key in file if key != "file_name"}
@@ -98,6 +98,19 @@ async def verify(query: DocVerifierRequest):
     
     # feed input to verifier and log
     _ = await asyncio.to_thread(lambda: verify_multiple_files(input_dict, min_pages, max_pages, document_analysis_client))
+    # results = await asyncio.to_thread(lambda: verify_multiple_files(input_dict, min_pages, max_pages, document_analysis_client))
+    # valid_to_verify = False
+    # for file_name, file_info in results.items():
+    #     if file_info["file_result"]["author_cell"] \
+    #     or file_info["file_result"]["author_date"] \
+    #     or file_info["file_result"]["philips_cell"] \
+    #     or file_info["file_result"]["philips_date"] \
+    #     or file_info["file_result"]["errors"]:
+    #         valid_to_verify = True
+    #         break
+    # if not valid_to_verify:
+    #     logger.info("no errors are found")
+    #     return DocVerifierResponse(response=[])
 
     # extract errors from log
     try:
@@ -107,21 +120,31 @@ async def verify(query: DocVerifierRequest):
     except Exception as e:
         logger.error(f"Error while extracting messages from log file: {e}")
         return DocVerifierResponse(**all_result)
-    logger.info("errors are extracted from log file")
+    if not errors:
+        logger.info("no errors are extracted")
+        return DocVerifierResponse(response=[])
+    else:
+        logger.info("errors are extracted from log file")
+        
     df = pd.DataFrame(errors)
     df = df.set_index("file_name").merge(
         pd.DataFrame(input_dict).T.reset_index(drop=False).rename(columns={"index": "file_name"}).set_index("file_name"), 
-        how="left", left_index=True, right_index=True
+        how="right", left_index=True, right_index=True
         ).reset_index(drop=False)
     
     # process errors of log, output all_result
     all_result = []
-    files = np.sort(df["file_name"].unique())
+    df = df.sort_values(["ranking", "file_name", "page_number"])
+    files = df["file_name"].unique()
     clear_path(config.IMAGE_PATH)
     for file in files:
-        logger.info(f"Start ploting on {file}")
-        file_result = []
         file_df = df[df["file_name"] == file]
+        if file_df["page_number"].isnull().values[0]:
+            logger.info(f"no errors are extracted from {file}")
+            continue
+        else:
+            logger.info(f"Start ploting on {file}")
+        file_result = []
         pages = np.sort(file_df["page_number"].unique())
         for page in pages:
             page = int(page)
@@ -151,7 +174,8 @@ async def verify(query: DocVerifierRequest):
         all_result.append({"file_name": file, "pages": file_result})
         logger.info(f"Completed ploting on {file}")
     
-    logger.info("Ploting completed")
+    if all_result:
+        logger.info("Ploting completed")
     return DocVerifierResponse(response=all_result)
 
 
