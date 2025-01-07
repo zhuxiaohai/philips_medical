@@ -1,0 +1,17 @@
+azure-ai-documentintelligence==1.0.0b4
+azure-ai-formrecognizer==3.3.0
+azure-common==1.1.28
+azure-core==1.32.0
+fastapi==0.111.0
+fastapi-cli==0.0.7
+numpy==1.26.4
+pandas==2.2.3
+pdf2image==1.17.0
+PyMuPDF==1.25.1
+pypdf==5.1.0
+pytest==8.3.4
+pytest-mock==3.14.0
+scikit-image==0.25.0
+scikit-learn==1.6.0
+scipy==1.14.1
+setuptools==75.6.0

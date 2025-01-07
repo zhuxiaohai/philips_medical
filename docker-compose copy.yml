@@ -1,0 +1,28 @@
+version: '3.8'
+
+networks:
+    doc_verifier_net:
+        driver: bridge
+
+services:
+  doc_verifier_server:
+    image: philips_medical:1.0
+    container_name: doc_verifier_server
+    hostname: doc_verifier_server
+    ports:
+      - 4501:4501
+    volumes:
+      - /home/ubuntu/projects/philips_medical/logging_config:/app/logging_config
+      - /home/ubuntu/data:/app/data
+      - /home/ubuntu/projects/philips_medical:/app/philips_medical
+      - /home/ubuntu/logs/philips_medical:/app/logs
+      - /home/ubuntu/images/philips_medical:/app/images
+      - /home/ubuntu/projects/philips_medical/doc_verifier_server.env:/app/.env
+    environment:
+      - LOG_PATH=/app/logs
+      - IMAGE_PATH=/app/images
+      - PYTHONPATH=/app/philips_medical
+      - DATA_PATH=/app/data
+    command: dotenv run -- python philips_medical/doc_verifier/main.py
+    networks:
+      - doc_verifier_net

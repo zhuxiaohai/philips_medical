@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "disable_existing_loggers": false,
+  "formatters": {
+      "fileFormatter": {
+          "format": "[%(asctime)s] [%(levelname)s] [%(name)s] : %(message)s"
+      },
+      "consoleFormatter": {
+          "format": "[%(levelname)s] [%(name)s] : %(message)s"
+      }
+  },
+  "handlers": {
+      "fileHandler": {
+          "class": "logging.handlers.TimedRotatingFileHandler",
+          "level": "INFO",
+          "formatter": "fileFormatter",
+          "filename": "{LOG_PATH}/app.log",
+          "encoding": "utf-8",
+          "when": "midnight",
+          "backupCount": 2
+      },
+      "consoleHandler": {
+          "class": "logging.StreamHandler",
+          "level": "DEBUG",
+          "formatter": "consoleFormatter"
+      }
+  },
+  "loggers": {
+      "doc_verifier": {
+          "level": "DEBUG",
+          "handlers": ["fileHandler", "consoleHandler"],
+          "propagate": false
+      }
+  }
+}
