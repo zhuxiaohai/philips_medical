@@ -3,11 +3,8 @@ from typing import List
     
     
 class DocVerifierRequest(BaseModel):
-    query: List[dict]
-
-
-class DocVerifierResponse(BaseModel):
-    response: List[dict]
+    url: str
+    ranking: int = 1
     
     
 class DocUploadResponse(BaseModel):
