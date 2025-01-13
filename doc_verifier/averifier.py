@@ -117,8 +117,8 @@ def process_page(
                     error = DocumentError(file_name, person['date']["content"], page_number, person['date']["bounding_regions"], "date is not black")
                     errors.append(error)
                     logger.info(error)
-                if person.get("role") and person["role"].find("philips") >= 0 and (not is_valid_date_format(person["date"]["content"])):
-                    error = DocumentError(file_name, person['date']["content"], page_number, person['date']["bounding_regions"], "date format is invalid") 
+                if person.get("role") and (person["role"].find("philips") >= 0) and (not is_valid_date_format(person["date"]["content"])) and (page_number > 1):
+                    error = DocumentError(file_name, person['date']["content"], page_number, person['date']["bounding_regions"], "philips date format is invalid") 
                     errors.append(error)
                     logger.info(error)
                 person_count += 1
@@ -146,11 +146,11 @@ def process_page(
         for person in signature_table["persons"]:
             formatted_date = format_date(person["date"]["content"])
             if formatted_date and author_date and (formatted_date < author_date):
-                error = DocumentError(file_name, person["signature"]["content"], page_number, person["date"]["bounding_regions"], "date is ahead of author date")
+                error = DocumentError(file_name, person["date"]["content"], page_number, person["date"]["bounding_regions"], "date is ahead of author date")
                 errors.append(error)
                 logger.info(error)
             if formatted_date and philips_date and (formatted_date > philips_date):
-                error = DocumentError(file_name, person["signature"]["content"], page_number, person["date"]["bounding_regions"], "date is behind philips date")
+                error = DocumentError(file_name, person["date"]["content"], page_number, person["date"]["bounding_regions"], "date is behind philips date")
                 errors.append(error)
                 logger.info(error)
             if (page_number > 1) or (table_idx > 0):
@@ -183,11 +183,11 @@ def process_page(
                 logger.info(error)
             formatted_date = format_date(pair["date"]["content"])
             if formatted_date and author_date and (formatted_date < author_date):
-                error = DocumentError(file_name, pair["signature"]["content"], page_number, pair["date"]["bounding_regions"], "date is ahead of author date")
+                error = DocumentError(file_name, pair["date"]["content"], page_number, pair["date"]["bounding_regions"], "date is ahead of author date")
                 errors.append(error)
                 logger.info(error)
             if formatted_date and philips_date and (formatted_date > philips_date):
-                error = DocumentError(file_name, pair["signature"]["content"], page_number, pair["date"]["bounding_regions"], "date is behind philips date")
+                error = DocumentError(file_name, pair["date"]["content"], page_number, pair["date"]["bounding_regions"], "date is behind philips date")
                 errors.append(error)
                 logger.info(error)
                 
@@ -255,16 +255,21 @@ async def averify_single_file(
     
     start_page = max(min_pages, start_page)
     if start_page == 1:
-        result = process_page(local_file_path, file_name, start_page)
-        author_date = result["results"]["author_date"]
-        author_cell = result["results"]["author_cell"]
-        philips_date = result["results"]["philips_date"]
-        philips_cell = result["results"]["philips_cell"]
-        
-        logger.debug(f"page {start_page} of {file_name} results in queue")
-        
-        await queue.put(result)
-        start_page += 1
+        try:
+            result = process_page(local_file_path, file_name, start_page)
+            author_date = result["results"]["author_date"]
+            author_cell = result["results"]["author_cell"]
+            philips_date = result["results"]["philips_date"]
+            philips_cell = result["results"]["philips_cell"]
+            
+            logger.debug(f"page {start_page} of {file_name} results in queue")
+            
+            await queue.put(result)
+            start_page += 1
+        except Exception as e:
+            logger.error(f"Error processing page {start_page}: {e}")
+            await queue.put({"error": str(e)})
+            return
     else:
         author_date = ""
         author_cell = None
@@ -275,20 +280,24 @@ async def averify_single_file(
 
     async def aprocess_with_semaphore(page_number):
         async with semaphore:
-            result = await asyncio.to_thread(
-                process_page,
-                local_file_path, 
-                file_name, 
-                page_number, 
-                author_date,
-                author_cell,
-                philips_date,
-                philips_cell,
-                )
-            
-            logger.debug(f"page {page_number} of {file_name} results in queue")
-            
-            await queue.put(result)
+            try:
+                result = await asyncio.to_thread(
+                    process_page,
+                    local_file_path, 
+                    file_name, 
+                    page_number, 
+                    author_date,
+                    author_cell,
+                    philips_date,
+                    philips_cell,
+                    )
+                
+                logger.debug(f"page {page_number} of {file_name} results in queue")
+                
+                await queue.put(result)
+            except Exception as e:
+                logger.error(f"Error processing page {page_number}: {e}")
+                await queue.put({"error": str(e)})
 
     tasks = [
         aprocess_with_semaphore(page_number)
@@ -308,6 +317,9 @@ async def asend_single_file_result(queue: asyncio.Queue, next_page = 1):
         result = await queue.get()
         if not result:
             break
+        if "error" in result:
+            yield f"data: {{\"task cancelled\": \"{result['error']}\"}}\n\n"
+            break
         page_number = result["page_number"]
         results_buffer[page_number] = result
 
@@ -315,7 +327,7 @@ async def asend_single_file_result(queue: asyncio.Queue, next_page = 1):
             
             logger.debug(f"page {next_page} of {results_buffer[next_page]["file_name"]} sent!")
             
-            yield f"data:{json.dumps(results_buffer.pop(next_page), ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(results_buffer.pop(next_page), ensure_ascii=False)}\n\n"
             next_page += 1
             
             
@@ -324,7 +336,7 @@ async def aprocess_single_file(
     min_pages: int, 
     max_pages: int, 
     start_page: int = 1,
-    semaphore_number : int = 4
+    semaphore_number: int = 4
     ):
     queue = asyncio.Queue()
     producer_task = asyncio.create_task(
@@ -337,11 +349,15 @@ async def aprocess_single_file(
             start_page
             )
         )
-
-    async for result in asend_single_file_result(queue, start_page):
-        yield result
-
-    await producer_task
+    
+    try:
+        async for result in asend_single_file_result(queue, start_page):
+            yield result
+            if "task cancelled" in result:
+                producer_task.cancel() 
+                break
+    finally:
+        await producer_task
             
 
 # def verify_multiple_files(files_dict: dict, min_pages: int, max_pages: int, document_analysis_client: DocumentAnalysisClient) -> dict:

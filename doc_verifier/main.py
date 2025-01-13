@@ -7,7 +7,6 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from doc_verifier.logging_utils import setup_logging
-from doc_verifier.utils import is_url, get_filename_from_url
 from doc_verifier import config
 from doc_verifier.verifier import process_single_file
 from doc_verifier.averifier import aprocess_single_file
@@ -15,7 +14,7 @@ from doc_verifier.domain import DocVerifierRequest, DocUploadResponse
 
 
 min_pages = config.MIN_PAGES
-max_pages = 3
+max_pages = config.MAX_PAGES
 
 
 def signal_handler(sig, frame):
@@ -116,7 +115,7 @@ async def verify(query: DocVerifierRequest):
     file_path = query.url
     return StreamingResponse(
         process_single_file(file_path, min_pages, max_pages), 
-        media_type="event_stream"
+        media_type="text/event-stream"
         )
     
     
@@ -125,7 +124,7 @@ async def averify(query: DocVerifierRequest):
     file_path = query.url
     return StreamingResponse(
         aprocess_single_file(file_path, min_pages, max_pages), 
-        media_type="event_stream"
+        media_type="text/event-stream"
         )
     
 

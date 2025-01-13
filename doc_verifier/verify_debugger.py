@@ -23,5 +23,5 @@ document_analysis_client = DocumentAnalysisClient(
 async def verify(file_path):
     async for i in process_single_file(file_path, min_pages, max_pages):
         print(i)
-file_path = "http://43.133.190.145:4501/data/1736554318/459801834582_OQ_report-Reflow_soldering_test.pdf"  
+file_path = "/home/ubuntu/data/CWE-PQ-023AWeldingPQReport_test2.pdf"  
 asyncio.run(verify(file_path))

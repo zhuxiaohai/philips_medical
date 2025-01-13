@@ -2,7 +2,7 @@ import os
 
 MIN_PAGES = 1
 
-MAX_PAGES = 50
+MAX_PAGES = 3
 
 if "LOG_PATH" in os.environ:
     LOG_PATH = os.environ["LOG_PATH"]

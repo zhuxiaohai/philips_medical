@@ -96,6 +96,8 @@ def format_date(date_str):
     
     # Remove any extra spaces
     date_str = re.sub(r'\s+', '', date_str)
+    date_str = re.sub(r'[，,]', '.', date_str)
+    date_str = date_str.strip(".")
     
     # Define possible date formats
     date_formats = [
