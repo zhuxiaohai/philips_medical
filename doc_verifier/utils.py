@@ -1,9 +1,84 @@
 from collections import deque, defaultdict
 from datetime import datetime
 import re
+import os
+import logging
+import fitz
+import requests
+from urllib.parse import urlparse
 from typing import List, Dict, Any
 
 from azure.ai.formrecognizer import BoundingRegion
+
+from doc_verifier import config
+
+
+logger = logging.getLogger("doc_verifier")
+
+
+def is_url(address):
+    regex = re.compile(
+        r'^(?:http|https)://'  # URL 必须以 http:// 或 https:// 开头
+        r'(?:\S+(?::\S*)?@)?'  # 可选的用户认证信息
+        r'(?:[A-Za-z0-9.-]+|\[[A-Fa-f0-9:]+\])'  # 域名或 IP 地址
+        r'(?::\d+)?'  # 可选的端口
+        r'(?:/\S*)?$'  # 可选的路径
+    )
+    return re.match(regex, address) is not None
+
+
+def get_filename_from_url(url):
+    parsed_url = urlparse(url)
+    url_parts = parsed_url.path.split("/")
+    if (parsed_url.scheme.find("http") >= 0) and (len(url_parts) > 2) and (url_parts[-2] != "data"):
+        return "/".join(url_parts[-2:])
+    else:
+        return os.path.basename(parsed_url.path)
+
+
+def download_file(url, save_path):
+    response = requests.get(url, stream=True)
+    response.raise_for_status()  
+    with open(save_path, "wb") as file:
+        for chunk in response.iter_content(chunk_size=8192):
+            file.write(chunk)
+            
+            
+def get_file_name_and_local_path_from_url(address):
+    if is_url(address):
+        filename = get_filename_from_url(address)
+        local_file_path = os.path.join(config.DATA_PATH, filename)
+    else:
+        filename = os.path.basename(address)
+        local_file_path = address
+    return local_file_path, filename
+            
+
+def get_pdf_page_number(address):
+    if is_url(address):
+        filename = get_filename_from_url(address)
+        local_file_path = os.path.join(config.DATA_PATH, filename)
+    else:
+        filename = os.path.basename(address)
+        local_file_path = address
+
+    if not os.path.exists(local_file_path):
+        if is_url(address): 
+            logger.info(f"downloading from: {address}")
+            os.makedirs(config.DATA_PATH, exist_ok=True) 
+            download_file(address, local_file_path)
+            logger.info(f"saved to: {local_file_path}")
+        else:
+            raise FileNotFoundError(f"local file not available: {local_file_path}")
+        
+    try:
+        with fitz.open(local_file_path) as pdf_document:
+            total_pages = pdf_document.page_count
+        logger.info(f"read {total_pages} pages from {local_file_path}")
+    except Exception as e:
+        raise FileNotFoundError(f"Failed to read from {local_file_path}: {e}")
+
+    return local_file_path, filename, total_pages
 
 
 def is_valid_date_format(date_str):
@@ -21,6 +96,8 @@ def format_date(date_str):
     
     # Remove any extra spaces
     date_str = re.sub(r'\s+', '', date_str)
+    date_str = re.sub(r'[，,]', '.', date_str)
+    date_str = date_str.strip(".")
     
     # Define possible date formats
     date_formats = [
@@ -50,7 +127,8 @@ def format_date(date_str):
             continue
     
     # If no format matches, raise an error
-    raise ValueError(f"Date format for '{date_str}' is not recognized")
+    # raise ValueError(f"Date format for '{date_str}' is not recognized")
+    return ""
 
 def extract_signature_tables(result: Any) -> List[Dict[str, Dict[str, Any]]]:
     """
@@ -85,7 +163,7 @@ def extract_signature_tables(result: Any) -> List[Dict[str, Dict[str, Any]]]:
             table_dict = {
                 "row_count": table.row_count, 
                 "column_count": table.column_count, 
-                "bounding_regions": table.bounding_regions, 
+                "bounding_regions": [region.to_dict() for region in table.bounding_regions], 
                 "persons": []
             }
             for row_index in range(1, table.row_count):
@@ -100,14 +178,14 @@ def extract_signature_tables(result: Any) -> List[Dict[str, Dict[str, Any]]]:
                         elif header.find("signature") >= 0:
                             person["signature"] = {
                                 "content": cell.content.strip().lower(),
-                                "spans": cell.spans,
-                                "bounding_regions": cell.bounding_regions
+                                "spans": [span.to_dict() for span in cell.spans],
+                                "bounding_regions": [region.to_dict() for region in cell.bounding_regions]
                                 }
                         elif header.find("date") >= 0:
                             person["date"] = {
                                 "content": cell.content.strip().lower(),
-                                "spans": cell.spans,
-                                "bounding_regions": cell.bounding_regions
+                                "spans": [span.to_dict() for span in cell.spans],
+                                "bounding_regions": [region.to_dict() for region in cell.bounding_regions]
                                 }
                 table_dict[f"persons"].append(person)
             signature_tables.append(table_dict)
@@ -173,13 +251,13 @@ def extract_signature_pairs(result) -> List[Dict[str, Dict[str, Any]]]:
         pairs.append(
             {"signature": {
                 "content": signature, 
-                "spans": sig_spans,
-                "bounding_regions": [BoundingRegion(polygon=sig_polygon, page_number=sig_page)]
+                "spans": [span.to_dict() for span in sig_spans],
+                "bounding_regions": [BoundingRegion(polygon=sig_polygon, page_number=sig_page).to_dict()]
                 },    
              "date": {
                  "content": date, 
-                 "spans": date_spans,
-                 "bounding_regions": [BoundingRegion(polygon=date_polygon, page_number=date_page)]
+                 "spans": [span.to_dict() for span in date_spans],
+                 "bounding_regions": [BoundingRegion(polygon=date_polygon, page_number=date_page).to_dict()]
                  }
              }
             )
@@ -206,8 +284,8 @@ def filter_blue_colors(hex_color):
 
 def get_styled_text(styles):
     # Iterate over the styles and merge the spans from each style.
-    spans = [span for style in styles for span in style.spans]
-    spans.sort(key=lambda span: span.offset)
+    spans = [span for style in styles for span in style["spans"]]
+    spans.sort(key=lambda span: span["offset"])
     return spans
 
 def extract_styles(result):
@@ -216,10 +294,11 @@ def extract_styles(result):
     colors = defaultdict(list)  
     # Iterate over the styles and group them by their font attributes.
     for style in result.styles:
-        if style.is_handwritten:
-            hands_written[style.is_handwritten].append(style)
-        if style.color:
-            colors[style.color].append(style)
+        style = style.to_dict()
+        if style["is_handwritten"]:
+            hands_written[style["is_handwritten"]].append(style)
+        if style["color"]:
+            colors[style["color"]].append(style)
     return hands_written, colors
 
 
@@ -251,8 +330,8 @@ def extract_page_number(result):
                     page_numbers[page.page_number] = {
                         "printed_number": int(match.group(1)),
                         "content": line.content,
-                        "spans": line.spans,
-                        "bounding_regions": [BoundingRegion(polygon=line.polygon, page_number=page.page_number)]
+                        "spans": [span.to_dict() for span in line.spans],
+                        "bounding_regions": [BoundingRegion(polygon=line.polygon, page_number=page.page_number).to_dict()]
                         }
                     break  # Assuming the page number is unique per page and stopping after finding it
             if page.page_number in page_numbers:
@@ -297,13 +376,13 @@ def has_intersection(
     if not cells:
         return False
     for cell in cells:
-        cell_offset = cell.offset
-        cell_length = cell.length
+        cell_offset = cell["offset"]
+        cell_length = cell["length"]
         cell_end = cell_offset + cell_length
         for _, spans in spans_dict.items():
             for span in spans:
-                span_offset = span.offset
-                span_length = span.length
+                span_offset = span["offset"]
+                span_length = span["length"]
                 span_end = span_offset + span_length
                 
                 # Check if there is an intersection

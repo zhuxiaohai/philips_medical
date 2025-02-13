@@ -224,8 +224,9 @@ def process_page(
     return response
 
 
-async def verify_single_file(
+async def averify_single_file(
     queue: asyncio.Queue,
+    semaphore_number: int,
     file_path: str, 
     min_pages: int, 
     max_pages: int, 
@@ -253,52 +254,64 @@ async def verify_single_file(
     logger.info(f"Begin to analyze {file_name}...")
     
     start_page = max(min_pages, start_page)
-    cancelled = False
-    
-    try:
-        if start_page == 1:
+    if start_page == 1:
+        try:
             result = process_page(local_file_path, file_name, start_page)
             author_date = result["results"]["author_date"]
             author_cell = result["results"]["author_cell"]
             philips_date = result["results"]["philips_date"]
             philips_cell = result["results"]["philips_cell"]
+            
+            logger.debug(f"page {start_page} of {file_name} results in queue")
+            
             await queue.put(result)
             start_page += 1
-        else:
-            author_date = ""
-            author_cell = None
-            philips_date = ""
-            philips_cell = None
-    except Exception as e:
-        logger.error(f"Error processing page {start_page}: {e}")
-        await queue.put({"error": str(e)})
-        cancelled = True
-            
-    if not cancelled:
-        for page_number in range(start_page, min(max_pages, num_pages) + 1):
+        except Exception as e:
+            logger.error(f"Error processing page {start_page}: {e}")
+            await queue.put({"error": str(e)})
+            return
+    else:
+        author_date = ""
+        author_cell = None
+        philips_date = ""
+        philips_cell = None
+    
+    semaphore = asyncio.Semaphore(semaphore_number)
+
+    async def aprocess_with_semaphore(page_number):
+        async with semaphore:
             try:
                 result = await asyncio.to_thread(
                     process_page,
                     local_file_path, 
                     file_name, 
-                    page_number,
+                    page_number, 
                     author_date,
                     author_cell,
                     philips_date,
-                    philips_cell
+                    philips_cell,
                     )
+                
+                logger.debug(f"page {page_number} of {file_name} results in queue")
+                
                 await queue.put(result)
             except Exception as e:
                 logger.error(f"Error processing page {page_number}: {e}")
                 await queue.put({"error": str(e)})
-                break
-        
+
+    tasks = [
+        aprocess_with_semaphore(page_number)
+        for page_number in range(start_page, min(max_pages, num_pages) + 1)
+    ]
+    
+    await asyncio.gather(*tasks)
+
     await queue.put(None)
     
     logger.info(f"Complete analyzing {file_name}.")
     
     
-async def send_single_file_result(queue: asyncio.Queue, next_page = 1):
+async def asend_single_file_result(queue: asyncio.Queue, next_page = 1):
     results_buffer = {}  
     while True:
         result = await queue.get()
@@ -311,32 +324,104 @@ async def send_single_file_result(queue: asyncio.Queue, next_page = 1):
         results_buffer[page_number] = result
 
         while next_page in results_buffer:
+            
+            logger.debug(f"page {next_page} of {results_buffer[next_page]["file_name"]} sent!")
+            
             yield f"data: {json.dumps(results_buffer.pop(next_page), ensure_ascii=False)}\n\n"
             next_page += 1
             
             
-async def process_single_file(
+async def aprocess_single_file(
     file_path: str, 
     min_pages: int, 
     max_pages: int, 
     start_page: int = 1,
+    semaphore_number: int = 4
     ):
     queue = asyncio.Queue()
     producer_task = asyncio.create_task(
-        verify_single_file(
+        averify_single_file(
             queue, 
+            semaphore_number, 
             file_path, 
             min_pages, 
             max_pages, 
             start_page
             )
         )
-
+    
     try:
-        async for result in send_single_file_result(queue, start_page):
+        async for result in asend_single_file_result(queue, start_page):
             yield result
             if "task cancelled" in result:
                 producer_task.cancel() 
                 break
     finally:
         await producer_task
+            
+
+# def verify_multiple_files(files_dict: dict, min_pages: int, max_pages: int, document_analysis_client: DocumentAnalysisClient) -> dict:
+#     """
+#     The function checks all the files for signatures and dates, and verifies that the 
+#     chronological order of the 'philips_date' in the documents matches the ranking order. For example, 
+#     if file1 has a ranking of 1 and file2 has a ranking of 2, then file1's 'philips_date' should be 
+#     earlier than file2's 'philips_date'.
+#     Args:
+#         files_dict (dict): A dictionary containing the file names and their corresponding file paths 
+#                            and rankings.
+#         min_pages (int): The minimum page number to start verification.
+#         max_pages (int): The maximum page number to end verification.
+#         document_analysis_client (DocumentAnalysisClient): The client used for document analysis.
+#     Returns:
+#         files_dict (dict): A dictionary containing the file names and their corresponding errors
+#     """
+#     logger.info("Begin to analyze all files.")
+    
+#     files_dict = files_dict.copy()
+    
+#     for file_name, file_info in files_dict.items():
+#         if not file_info["file_path"]:
+#             continue
+#         try:
+#             file_result = verify_single_file(file_info["file_path"], file_name, min_pages, max_pages, document_analysis_client)
+#             file_info["file_result"] = file_result
+#         except Exception as e:
+#             file_info["file_result"] = {
+#                 "author_cell": None,
+#                 "author_date": "",
+#                 "philips_cell": None,
+#                 "philips_date": "",
+#                 "errors": [DocumentError(file_name, str(e), 0, [], "execution error")]
+#             }    
+
+#     # make a list and sort it by ranking
+#     philips_dates = []
+    
+#     for file_name, file_info in files_dict.items():
+#         if file_info["file_result"]["philips_date"]:
+#             philips_dates.append(
+#                 {
+#                     "file_name": file_name, 
+#                     "file_ranking": file_info["ranking"], 
+#                     "file_date": file_info["file_result"]["philips_date"]
+#                 }
+#             )
+        
+#     if philips_dates:
+#         philips_dates.sort(key=lambda x: x["file_ranking"])
+#         for i in range(1, len(philips_dates)):
+#             if philips_dates[i]["file_date"] < philips_dates[i-1]["file_date"]:
+#                 file_name = philips_dates[i]["file_name"]
+#                 error = DocumentError(
+#                     file_name,
+#                     files_dict[file_name]["file_result"]["philips_cell"]["date"]["content"],
+#                     files_dict[file_name]["file_result"]["philips_cell"]["date"]["bounding_regions"]["page_number"], 
+#                     files_dict[file_name]["file_result"]["philips_cell"]["date"]["bounding_regions"],
+#                     f"{file_name} is signed earlier than {philips_dates[i-1]["file_name"]}"
+#                     )
+#                 files_dict[file_name]["file_result"]["errors"].append(error)
+#                 logger.info(error)
+    
+#     logger.info("Complete analyzing all files.")
+              
+#     return files_dict

@@ -12,13 +12,13 @@ services:
     env_file:
       - .env
     ports:
-      - 4501:4501
+      - 4503:4503
     volumes:
-      - /home/ubuntu/projects/philips_medical/logging_config:/app/logging_config
-      - /home/ubuntu/data:/app/data
-      - /home/ubuntu/projects/philips_medical:/app/philips_medical
-      - /home/ubuntu/logs/philips_medical:/app/logs
-      - /home/ubuntu/images/philips_medical:/app/images
+      - /home/colin.zhu/projects/philips_medical/logging_config:/app/logging_config
+      - /home/colin.zhu/data:/app/data
+      - /home/colin.zhu/projects/philips_medical:/app/philips_medical
+      - /home/colin.zhu/logs/philips_medical:/app/logs
+      - /home/colin.zhu/images/philips_medical:/app/images
     environment:
       DATA_PATH: /app/data
       LOG_PATH: /app/logs

@@ -41,7 +41,7 @@ class DocumentError:
                 "error_type": self.error_type, 
                 "page_number": self.page_number, 
                 "content": self.content, 
-                "bounding_regions": [region.to_dict() for region in self.bounding_regions]
+                "bounding_regions": self.bounding_regions
             },
             ensure_ascii=False
         )
